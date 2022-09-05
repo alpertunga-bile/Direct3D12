@@ -1,5 +1,8 @@
 #include "../Includes/HelloTriangle.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 HelloTriangle::HelloTriangle(HINSTANCE hInstance, int ShowWnd, int width, int height, bool fullscreen) :
 	frameIndex(0),
 	useWarpDevice(false),
@@ -110,6 +113,7 @@ void HelloTriangle::LoadPipeline()
 	// --------------------------------------------------------------------------------------------------------
 	// Create Descriptor Heap
 
+	// render target view descriptor heap
 	D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
 	rtvHeapDesc.NumDescriptors = frameCount;
 	rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -117,7 +121,18 @@ void HelloTriangle::LoadPipeline()
 
 	CHECK_HRESULT(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&rtvHeap)));
 
+	// shader resource view heap for texture
+	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+	srvHeapDesc.NumDescriptors = 1;
+	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	
+	CHECK_HRESULT(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvHeap)));
+
 	rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+	// --------------------------------------------------------------------------------------------------------
+	// Create Frame Resources
 
 	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
 
@@ -136,13 +151,42 @@ void HelloTriangle::LoadAssets()
 	// --------------------------------------------------------------------------------------------------------
 	// Create Root Signature
 
-	CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-	rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+	D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
+	featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+
+	if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData))))
+	{
+		featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+	}
+
+	CD3DX12_DESCRIPTOR_RANGE1 ranges[1];
+	ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+
+	CD3DX12_ROOT_PARAMETER1 rootParameters[1];
+	rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
+
+	D3D12_STATIC_SAMPLER_DESC sampler = {};
+	sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+	sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+	sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+	sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+	sampler.MipLODBias = 0;
+	sampler.MaxAnisotropy = 0;
+	sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+	sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+	sampler.MinLOD = 0.0f;
+	sampler.MaxLOD = D3D12_FLOAT32_MAX;
+	sampler.ShaderRegister = 0;
+	sampler.RegisterSpace = 0;
+	sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+	rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
 	Microsoft::WRL::ComPtr<ID3DBlob> signature;
 	Microsoft::WRL::ComPtr<ID3DBlob> error;
 
-	CHECK_HRESULT(D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error));
+	CHECK_HRESULT(D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error));
 	CHECK_HRESULT(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&rootSignature)));
 
 	// --------------------------------------------------------------------------------------------------------
@@ -163,7 +207,7 @@ void HelloTriangle::LoadAssets()
 	D3D12_INPUT_ELEMENT_DESC inputElementDesc[] =
 	{
 		{"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-		{"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
+		{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
 	};
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
@@ -188,16 +232,14 @@ void HelloTriangle::LoadAssets()
 
 	CHECK_HRESULT(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), pipelineState.Get(), IID_PPV_ARGS(&commandList)));
 
-	// because there is nothing to recording
-	CHECK_HRESULT(commandList->Close());
-
 	// --------------------------------------------------------------------------------------------------------
 	// Create Vertex Buffer
+
 	Vertex triangleVertices[] =
 	{
-		{{0.0f, 0.25f * aspect_ratio, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-		{{0.25f, -0.25f * aspect_ratio, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
-		{{-0.25f, -0.25f * aspect_ratio, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}
+		{ {  0.0f,   0.25f * aspect_ratio, 0.0f }, { 0.5f, 0.0f } },
+		{ {  0.25f, -0.25f * aspect_ratio, 0.0f }, { 1.0f, 1.0f } },
+		{ { -0.25f, -0.25f * aspect_ratio, 0.0f }, { 0.0f, 1.0f } }
 	};
 
 	const unsigned int vertexBufferSize = sizeof(triangleVertices);
@@ -225,6 +267,74 @@ void HelloTriangle::LoadAssets()
 	vertexBufferView.SizeInBytes = vertexBufferSize;
 
 	// --------------------------------------------------------------------------------------------------------
+	// Create Texture
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> textureUploadHeap;
+
+	D3D12_RESOURCE_DESC textureDesc = {};
+	textureDesc.MipLevels = 1;
+	textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	textureDesc.Width = textureWidth;
+	textureDesc.Height = textureHeight;
+	textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+	textureDesc.DepthOrArraySize = 1;
+	textureDesc.SampleDesc.Count = 1;
+	textureDesc.SampleDesc.Quality = 0;
+	textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+
+	CD3DX12_HEAP_PROPERTIES heapProperty = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+
+	CHECK_HRESULT(device->CreateCommittedResource(
+		&heapProperty,
+		D3D12_HEAP_FLAG_NONE,
+		&textureDesc,
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		nullptr,
+		IID_PPV_ARGS(&texture)
+	));
+
+	const uint64_t uploadBufferSize = GetRequiredIntermediateSize(texture.Get(), 0, 1);
+
+	heapProperty = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+	CD3DX12_RESOURCE_DESC buffer = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+
+	CHECK_HRESULT(device->CreateCommittedResource(
+		&heapProperty,
+		D3D12_HEAP_FLAG_NONE,
+		&buffer,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(&textureUploadHeap)
+	));
+
+	std::vector<uint8_t> texture_data = GenerateTextureData();
+
+	D3D12_SUBRESOURCE_DATA textureData = {};
+	textureData.pData = &texture_data[0];
+	textureData.RowPitch = textureWidth * texturePixelSize;
+	textureData.SlicePitch = textureData.RowPitch * textureHeight;
+
+	UpdateSubresources(commandList.Get(), texture.Get(), textureUploadHeap.Get(), 0, 0, 1, &textureData);
+	CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+		texture.Get(),
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+	);
+	
+	commandList->ResourceBarrier(1, &barrier);
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.Format = textureDesc.Format;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MipLevels = 1;
+	device->CreateShaderResourceView(texture.Get(), &srvDesc, srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+	CHECK_HRESULT(commandList->Close());
+	ID3D12CommandList* pp_commandLists[] = { commandList.Get() };
+	commandQueue->ExecuteCommandLists(_countof(pp_commandLists), pp_commandLists);
+
+	// --------------------------------------------------------------------------------------------------------
 	// Create Fence
 
 	CHECK_HRESULT(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
@@ -239,6 +349,32 @@ void HelloTriangle::LoadAssets()
 	WaitForPreviousFrame();
 }
 
+std::vector<uint8_t> HelloTriangle::GenerateTextureData()
+{
+	const unsigned int rowPitch = textureWidth * texturePixelSize;
+	const unsigned int cellPitch = rowPitch >> 3;
+	const unsigned int cellHeight = textureWidth >> 3;
+	const unsigned int textureSize = rowPitch * textureHeight;
+
+	std::vector<uint8_t> textureData(textureSize);
+	uint8_t* p_data = &textureData[0];
+
+	for (unsigned int n = 0; n < textureSize; n += texturePixelSize)
+	{
+		unsigned int x = n % rowPitch;
+		unsigned int y = n / rowPitch;
+		unsigned int i = x / cellPitch;
+		unsigned int j = y / cellHeight;
+
+		p_data[n]	  = GetIntValue(0, 255);
+		p_data[n + 1] = GetIntValue(0, 255);
+		p_data[n + 2] = GetIntValue(0, 255);
+		p_data[n + 3] = 255;
+	}
+
+	return textureData;
+}
+
 void HelloTriangle::PopulateCommandLists()
 {
 	CD3DX12_RESOURCE_BARRIER barrier;
@@ -248,6 +384,11 @@ void HelloTriangle::PopulateCommandLists()
 	CHECK_HRESULT(commandList->Reset(commandAllocator.Get(), pipelineState.Get()));
 
 	commandList->SetGraphicsRootSignature(rootSignature.Get());
+
+	ID3D12DescriptorHeap* pp_heaps[] = { srvHeap.Get() };
+	commandList->SetDescriptorHeaps(_countof(pp_heaps), pp_heaps);
+
+	commandList->SetGraphicsRootDescriptorTable(0, srvHeap->GetGPUDescriptorHandleForHeapStart());
 	commandList->RSSetViewports(1, &viewport);
 	commandList->RSSetScissorRects(1, &scissorRect);
 
