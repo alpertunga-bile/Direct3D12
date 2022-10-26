@@ -1,11 +1,8 @@
-#include "Includes/HelloTriangle.h"
+#include "Includes/Application.h"
+#include "Includes/window.h"
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int ncmdShow)
+void windowsMain()
 {
-	HelloTriangle triangleApp(hInstance, ncmdShow, WIDTH, HEIGHT, false);
-
-	triangleApp.OnInit();
-
 	MSG msg;
 	ZeroMemory(&msg, sizeof(MSG));
 
@@ -23,12 +20,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int ncmdShow)
 		}
 		else
 		{
-			triangleApp.OnUpdate();
-			triangleApp.OnRender();
+
 		}
 	}
+}
 
-	triangleApp.OnDestroy();
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int ncmdShow)
+{
+	#ifdef _DEBUG
+		AllocConsole();
+	#endif
+
+	Window window;
+
+	if (!window.InitializeWindow(hInstance, ncmdShow, WIDTH, HEIGHT, false))
+	{
+		MessageBox(0, L"Cannot Initialize Window", L"Error", MB_OK);
+		exit(1);
+	}
+
+	ev::Application app;
+
+	windowsMain();
 
 	return 0;
 }

@@ -16,8 +16,12 @@
 
 #if _DEBUG
 	#define CHECK_HRESULT(result) check_hresult(result, __FILE__, __LINE__)
+	#define LOG_INFO(msg) print_debug(msg, __FILE__, __LINE__)
+	#define LOG_ERROR(msg) print_debug(msg, __FILE__, __LINE__)
 #else
 	#define CHECK_HRESULT(result)
+	#define LOG_INFO(msg)
+	#define LOG_ERROR(msg)
 #endif
 
 const float aspect_ratio = 16.0f / 9.0f;
@@ -26,14 +30,20 @@ const unsigned int HEIGHT = WIDTH / aspect_ratio;
 
 static void print_debug(const char* result, const char* file, int line)
 {
+	HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+
+	if (stdOut == NULL || stdOut == INVALID_HANDLE_VALUE)
+	{
+		return;
+	}
+
 	std::string strFile = file;
 	std::string strLine = std::to_string(line);
 	std::string strResult = result;
-	std::string tempMSG = "[" + strFile + "] " + strLine + " " + strResult;
-	std::wstring stemp = std::wstring(tempMSG.begin(), tempMSG.end());
-	LPCWSTR msg = stemp.c_str();
-
-	MessageBox(0, msg, L"Error", MB_ICONERROR | MB_OK);
+	std::string tempMSG = "[" + strFile + "] " + strLine + " " + strResult + "\n";
+	
+	DWORD written = 0;
+	WriteConsoleA(stdOut, tempMSG.c_str(), tempMSG.length(), &written, NULL);
 }
 
 static void check_hresult(HRESULT result, const char* file, int line)
